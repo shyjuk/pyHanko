@@ -308,7 +308,8 @@ async def test_detached_cms_with_wrong_content_tst():
     assert status.timestamp_validity.timestamp == datetime.now(tz=pytz.utc)
     assert status.content_timestamp_validity
     assert not status.content_timestamp_validity.intact
-    assert not status.content_timestamp_validity.valid
+    # internally, the content timestamp is OK
+    assert status.content_timestamp_validity.valid
     assert status.content_timestamp_validity.timestamp == datetime.now(tz=pytz.utc)
     pretty_print = status.pretty_print_details()
     assert 'The TSA certificate is untrusted' in pretty_print
