@@ -60,38 +60,45 @@ logger = logging.getLogger(__name__)
 StatusType = TypeVar('StatusType', bound=SignatureStatus)
 
 
+def _grab_signing_cert_attr(signed_attrs, v2: bool):
+    attr_name = 'signing_certificate_v2' if v2 else 'signing_certificate'
+    try:
+        return find_unique_cms_attribute(signed_attrs, attr_name)
+    except NonexistentAttributeError:
+        return None
+    except MultivaluedAttributeError:
+        # Banned by RFCs -> error
+        err = AdESIndeterminate.NO_SIGNING_CERTIFICATE_FOUND
+        raise SignatureValidationError(
+            "Wrong cardinality for signing certificate attribute",
+            ades_subindication=err
+        )
+
+
 def _check_signing_certificate(cert: x509.Certificate,
                                signed_attrs: cms.CMSAttributes):
     # TODO check certificate policies, enforce restrictions on chain of trust
     # TODO document and/or mark as internal API explicitly
-    def _grab(attr_name):
-        try:
-            return find_unique_cms_attribute(signed_attrs, attr_name)
-        except NonexistentAttributeError:
-            return None
-        except MultivaluedAttributeError as e:
-            raise SignatureValidationError(
-                "Wrong cardinality for signing certificate attribute"
-            ) from e
 
-    attr = _grab('signing_certificate_v2')
+    attr = _grab_signing_cert_attr(signed_attrs, v2=True)
     if attr is None:
-        attr = _grab('signing_certificate')
+        attr = _grab_signing_cert_attr(signed_attrs, v2=False)
 
     if attr is None:
         # if neither attr is present -> no constraints
         return
 
-    # we only care about the first value, the others limit the set of applicable
-    # CA certs
+    # For the main signer cert, we only care about the first value, the others
+    # limit the set of applicable CA certs
     certid = attr['certs'][0]
 
     if not check_ess_certid(cert, certid):
+        err = AdESIndeterminate.NO_SIGNING_CERTIFICATE_FOUND
         raise SignatureValidationError(
             f"Signing certificate attribute does not match selected "
             f"signer's certificate for subject"
             f"\"{cert.subject.human_friendly}\".",
-            ades_subindication=AdESIndeterminate.NO_SIGNING_CERTIFICATE_FOUND
+            ades_subindication=err
         )
 
 
@@ -348,6 +355,8 @@ async def validate_cert_usage(
     Internal API.
     """
 
+    # TODO use path building & validation API directly and filter candidate
+    #  paths based on criteria in the signature container.
     cert: x509.Certificate = validator.certificate
 
     path = None
@@ -573,7 +582,8 @@ async def validate_tst_signed_data(
         tst_info = tst_info_bytes.parsed
     if not isinstance(tst_info, tsp.TSTInfo):
         raise SignatureValidationError(
-            "SignedData does not encapsulate TSTInfo"
+            "SignedData does not encapsulate TSTInfo",
+            ades_subindication=AdESFailure.FORMAT_FAILURE
         )
     timestamp = tst_info['gen_time'].native
 
@@ -626,7 +636,10 @@ async def collect_signer_attr_status(
     except NonexistentAttributeError:
         signer_attrs = None
     except MultivaluedAttributeError as e:
-        raise SignatureValidationError(str(e)) from e
+        # TODO downgrade to a warning?
+        raise SignatureValidationError(
+            str(e), ades_subindication=AdESFailure.FORMAT_FAILURE
+        ) from e
 
     result = {}
     cades_ac_results = None
