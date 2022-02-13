@@ -1,5 +1,4 @@
 import os
-import struct
 from datetime import datetime
 from io import BytesIO
 from itertools import product
